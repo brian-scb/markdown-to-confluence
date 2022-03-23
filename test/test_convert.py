@@ -45,13 +45,50 @@ class TestConvert(unittest.TestCase):
 
     def testHeader(self):
         have = 'test'
-        want = '<h1>{}</h1>'.format(have)
+        want = ''
         renderer = ConfluenceRenderer()
-        got = renderer.header(have, 1)
+        got = renderer.heading(have, 1)
         got = got.strip()
         self.assertEqual(got, want)
         self.assertEqual(renderer.has_toc, True)
 
+    def testHeader(self):
+        have = 'test'
+        want = '<h2>{}</h2>'.format(have)
+        renderer = ConfluenceRenderer()
+        got = renderer.heading(have, 2)
+        got = got.strip()
+        self.assertEqual(got, want)
+        self.assertEqual(renderer.has_toc, True)
+
+    def testBlockMermaid(self):
+        have = """graph TD
+    A[Holiday] -->|Get money| B(Go shopping)
+    B --> C{Let me think}
+    C -->|One| D[Laptop]
+    C -->|Two| E[iPhone]
+    C -->|Three| F[fa:fa-car Car]
+        """
+        want = '<ac:image><ri:url ri:value="https://mermaid.ink/img/eyJjb2RlIjogImdyYXBoIFREXG4gICAgQVtIb2xpZGF5XSAtLT58R2V0IG1vbmV5fCBCKEdvIHNob3BwaW5nKVxuICAgIEIgLS0+IEN7TGV0IG1lIHRoaW5rfVxuICAgIEMgLS0+fE9uZXwgRFtMYXB0b3BdXG4gICAgQyAtLT58VHdvfCBFW2lQaG9uZV1cbiAgICBDIC0tPnxUaHJlZXwgRltmYTpmYS1jYXIgQ2FyXVxuICAgICAgICAiLCAibWVybWFpZCI6IHsidGhlbWUiOiAiZGVmYXVsdCJ9fQ==" /></ac:image>'
+        renderer = ConfluenceRenderer()
+        got = renderer.block_mermaid(have)
+        self.assertEqual(got, want)
+
+    def testBlockQuote(self):
+        have = "<p>Doing nothing is the hardest work of all.</p>"
+        want = "<blockquote>\nDoing nothing is the hardest work of all.</blockquote>\n"
+
+        renderer = ConfluenceRenderer()
+        got = renderer.block_quote(have)
+        self.assertEqual(got, want)
+
+    def testBlockQuoteMultiParagraph(self):
+        have = "<p>Doing nothing...</p><p>Is the hardest work of all.</p>"
+        want = "<blockquote>\n<p>Doing nothing...</p><p>Is the hardest work of all.</p></blockquote>\n"
+
+        renderer = ConfluenceRenderer()
+        got = renderer.block_quote(have)
+        self.assertEqual(got, want)
 
 class TestConvertParse(unittest.TestCase):
     have_yaml = textwrap.dedent(

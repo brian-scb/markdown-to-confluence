@@ -2,7 +2,10 @@ import mistune
 import os
 import textwrap
 import yaml
+import json
 
+from mistune.plugins import plugin_table
+from base64 import b64encode
 from urllib.parse import urlparse
 
 YAML_BOUNDARY = '---'
@@ -39,19 +42,21 @@ def convtoconf(markdown, front_matter={}):
 
     author_keys = front_matter.get('author_keys', [])
     renderer = ConfluenceRenderer(authors=author_keys)
-    content_html = mistune.markdown(markdown, renderer=renderer)
-    page_html = renderer.layout(content_html)
+    markdown_html = mistune.create_markdown(renderer=renderer, plugins=[plugin_table])
+    page_html = markdown_html(markdown)
 
-    return page_html, renderer.attachments
+    title = front_matter.get('title', renderer.top_heading)
 
+    return page_html, renderer.attachments, title
 
-class ConfluenceRenderer(mistune.Renderer):
+class ConfluenceRenderer(mistune.HTMLRenderer):
     def __init__(self, authors=[]):
         self.attachments = []
         if authors is None:
             authors = []
         self.authors = authors
         self.has_toc = False
+        self.top_heading = None
         super().__init__()
 
     def layout(self, content):
@@ -68,7 +73,7 @@ class ConfluenceRenderer(mistune.Renderer):
         | (30% width) |      (800px width)       |
         |             |                          |
         ------------------------------------------
-        
+
         Arguments:
             content {str} -- The HTML of the content
         """
@@ -91,24 +96,30 @@ class ConfluenceRenderer(mistune.Renderer):
         main_content = column.format(width='800px', content=content)
         return sidebar + main_content
 
-    def header(self, text, level, raw=None):
+    def heading(self, text, level):
         """Processes a Markdown header.
 
         In our case, this just tells us that we need to render a TOC. We don't
         actually do any special rendering for headers.
         """
         self.has_toc = True
-        return super().header(text, level, raw)
+
+        # use the first h1 as the title and don't render it because confluence shows the title itself
+        if self.top_heading is None and level == 1:
+            self.top_heading = text
+            return ""
+
+        return super().heading(text, level)
 
     def render_authors(self):
         """Renders a header that details which author(s) published the post.
 
         This is used since Confluence will show the post published as our
         service account.
-        
+
         Arguments:
             author_keys {str} -- The Confluence user keys for each post author
-        
+
         Returns:
             str -- The HTML to prepend to the post specifying the authors
         """
@@ -121,7 +132,35 @@ class ConfluenceRenderer(mistune.Renderer):
             for user_key in self.authors)
         return '<h1>Authors</h1><p>{}</p>'.format(author_content)
 
-    def block_code(self, code, lang):
+    def block_mermaid(self, code):
+        """Render mermaid code block as an png image using the mermaid.ink service
+
+        In the future the image could be downloaded and attached as an internal image
+
+        Arguments:
+          code {str} -- The contents of the mermaid code block
+
+        Returns:
+          str -- The HTML to render a mermaid diagram as a png image
+        """
+        data = b64encode(json.dumps({ "code": code, "mermaid": { "theme": "default" } }).encode())
+        src = "https://mermaid.ink/img/%s" % data.decode("utf-8")
+        tag_template = '<ac:image>{image_tag}</ac:image>'
+        image_tag = '<ri:url ri:value="{}" />'.format(src)
+        return tag_template.format(image_tag=image_tag)
+
+    def block_quote(self, content):
+        if content.count("</p>") == 1:
+            stripped = content.replace("<p>", "").replace("</p>", "")
+        else:
+            stripped = content
+
+        return super().block_quote(stripped)
+
+    def block_code(self, code, lang=None):
+        if lang == "mermaid":
+            return self.block_mermaid(code)
+
         return textwrap.dedent('''\
             <ac:structured-macro ac:name="code" ac:schema-version="1">
                 <ac:parameter ac:name="language">{l}</ac:parameter>
@@ -150,3 +189,27 @@ class ConfluenceRenderer(mistune.Renderer):
                 os.path.basename(src))
             self.attachments.append(src)
         return tag_template.format(image_tag=image_tag)
+
+    def link(self, link, title, content):
+        """Render a link into HTML
+        if the link is external leave it as is, if internal the
+        might be best to turn it into text for now as the links won't work.
+
+        Can't think of how to fix them correctly because ancestors have to be
+        created first, so the posts for the links in the root article won't exist
+        yet. Normal wikis this isn't a problem, but confluence puts the id in the
+        path for posts. :(
+
+        Arguments:
+            link {str} -- the href for the link
+            title {str} -- the title of the link
+            content {str} -- the innerHTML for the link
+
+        Returns:
+            str -- the html for the link (or text)
+        """
+        is_external = bool(urlparse(link).netloc)
+        if is_external:
+            return super().link(link, title, content)
+
+        return super().text(content)

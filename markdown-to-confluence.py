@@ -2,9 +2,9 @@
 import argparse
 import logging
 import os
-import requests
 import git
 import sys
+import re
 
 from confluence import Confluence
 from convert import convtoconf, parse
@@ -41,32 +41,29 @@ def get_environ_headers(prefix):
 
 def get_last_modified(repo):
     """Returns the paths to the last modified files in the provided Git repo
-    
+
     Arguments:
         repo {git.Repo} -- The repository object
     """
     changed_files = repo.git.diff('HEAD~1..HEAD', name_only=True).split()
-    for filepath in changed_files:
-        if not filepath.startswith('content/'):
-            changed_files.remove(filepath)
+    changed_files.sort(key=lambda x: x.count('/') or 0)
+
     return changed_files
 
+def get_slug(title, prefix=''):
+    """Returns the slug for a given title
 
-def get_slug(filepath, prefix=''):
-    """Returns the slug for a given filepath
-    
     Arguments:
-        filepath {str} -- The filepath for the post
+        title {str} -- The title for the post
         prefix {str} -- Any prefixes to the slug
     """
-    slug, _ = os.path.splitext(os.path.basename(filepath))
     # Confluence doesn't support searching for labels with a "-",
     # so we need to adjust it.
-    slug = slug.replace('-', '_')
+    slug = title.lower().replace(' ', '_').replace('-', '_')
     if prefix:
         slug = '{}_{}'.format(prefix, slug)
-    return slug
 
+    return re.sub('[^\w\-]', '', slug).replace('___', '_');
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -154,7 +151,7 @@ def parse_args():
 
 def deploy_file(post_path, args, confluence):
     """Creates or updates a file in Confluence
-    
+
     Arguments:
         post_path {str} -- The absolute path of the post to deploy to Confluence
         args {argparse.Arguments} -- The parsed command-line arguments
@@ -189,17 +186,24 @@ def deploy_file(post_path, args, confluence):
         front_matter['author_keys'].append(confluence_author['userKey'])
 
     # Normalize the content into whatever format Confluence expects
-    html, attachments = convtoconf(markdown, front_matter=front_matter)
+    html, attachments, title = convtoconf(markdown, front_matter=front_matter)
 
     static_path = os.path.join(args.git, 'static')
     for i, attachment in enumerate(attachments):
         attachments[i] = os.path.join(static_path, attachment.lstrip('/'))
 
     slug_prefix = '_'.join(author.lower() for author in authors)
-    post_slug = get_slug(post_path, prefix=slug_prefix)
+    post_slug = get_slug(title, prefix=slug_prefix)
 
     ancestor_id = front_matter['wiki'].get('ancestor_id', args.ancestor_id)
+    ancestor_title = front_matter['wiki'].get('ancestor_title', None)
+
     space = front_matter['wiki'].get('space', args.space)
+
+    if (ancestor_title is not None):
+        ancestor = confluence.exists(space=space, slug=get_slug(ancestor_title, prefix=slug_prefix))
+        if ancestor is not None:
+            ancestor_id = ancestor.get("id", None)
 
     tags = front_matter.get('tags', [])
     if args.global_label:
@@ -208,10 +212,11 @@ def deploy_file(post_path, args, confluence):
     page = confluence.exists(slug=post_slug,
                              ancestor_id=ancestor_id,
                              space=space)
+
     if page:
         confluence.update(page['id'],
                           content=html,
-                          title=front_matter['title'],
+                          title=title,
                           tags=tags,
                           slug=post_slug,
                           space=space,
@@ -220,12 +225,12 @@ def deploy_file(post_path, args, confluence):
                           attachments=attachments)
     else:
         confluence.create(content=html,
-                          title=front_matter['title'],
-                          tags=tags,
-                          slug=post_slug,
-                          space=space,
-                          ancestor_id=ancestor_id,
-                          attachments=attachments)
+                            title=title,
+                            tags=tags,
+                            slug=post_slug,
+                            space=space,
+                            ancestor_id=ancestor_id,
+                            attachments=attachments)
 
 
 def main():
